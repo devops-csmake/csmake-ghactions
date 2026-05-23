@@ -61,17 +61,63 @@ class GHActions(CsmakeModuleAllPhase):
 
     def default(self, options):
         action_ref = options['--action'].strip()
+
+        if_cond = options.get('--if')
+        if if_cond is not None:
+            env = self._extra_env_from_options(options)
+            if not self._eval_if(if_cond, env):
+                self.log.chat("  Skipping step (condition false): " + action_ref)
+                self.log.passed()
+                return True
+
         inputs = {k: v.strip() for k, v in options.items() if not k.startswith('--')}
+        step_id = options.get('--step-id', '')
         try:
             action_path = self._get_action(action_ref)
             action_def  = self._load_action_def(action_path)
-            self._run_action(action_def, action_path, inputs, action_ref)
+            self._run_action(action_def, action_path, inputs, action_ref,
+                             step_id=step_id,
+                             extra_env=self._extra_env_from_options(options))
             self.log.passed()
             return True
         except Exception as e:
             self.log.error("GHActions '%s' failed: %s", action_ref, str(e))
             self.log.failed()
             return None
+
+    def _extra_env_from_options(self, options):
+        """Extract --env-KEY options into a plain dict."""
+        env = {}
+        for k, v in options.items():
+            if k.startswith('--env-'):
+                env[k[6:]] = v  # strip '--env-' prefix
+        return env
+
+    def _eval_if(self, condition, extra_env):
+        if condition is True or condition == 'true':
+            return True
+        if condition is False or condition == 'false':
+            return False
+        merged = dict(os.environ)
+        merged.update(extra_env)
+        result = self._subst_simple(str(condition).strip(), merged)
+        return result.lower().strip() not in ('false', '0', '', 'null', 'none')
+
+    def _subst_simple(self, text, env):
+        """Minimal ${{ }} substitution using a flat env dict (no step_outputs)."""
+        import re as _re
+        _expr = re.compile(r'\$\{\{\s*(.*?)\s*\}\}')
+        def _replace(m):
+            expr = m.group(1).strip()
+            if expr.startswith('env.'):
+                return env.get(expr[4:], '')
+            if expr == 'github.workspace':
+                return os.getcwd()
+            if expr.startswith('github.'):
+                key = 'GITHUB_' + expr[7:].upper().replace('.', '_')
+                return env.get(key, os.environ.get(key, ''))
+            return m.group(0)
+        return _expr.sub(_replace, text)
 
     # ------------------------------------------------------------------ #
     # Action resolution / download                                         #
@@ -170,15 +216,17 @@ class GHActions(CsmakeModuleAllPhase):
     # Action execution dispatch                                            #
     # ------------------------------------------------------------------ #
 
-    def _run_action(self, action_def, action_path, inputs, action_ref):
+    def _run_action(self, action_def, action_path, inputs, action_ref,
+                    step_id='', extra_env=None):
         runs  = action_def.get('runs') or {}
         using = runs.get('using', '')
+        kw = dict(step_id=step_id, extra_env=extra_env or {})
         if using == 'composite':
-            self._run_composite(action_def, action_path, inputs)
+            self._run_composite(action_def, action_path, inputs, **kw)
         elif using.startswith('node'):
-            self._run_node(action_def, action_path, inputs)
+            self._run_node(action_def, action_path, inputs, **kw)
         elif using == 'docker':
-            self._run_docker(action_def, action_path, inputs)
+            self._run_docker(action_def, action_path, inputs, **kw)
         else:
             raise RuntimeError(
                 "Unsupported action type '%s' in %s" % (using, action_ref))
@@ -187,7 +235,8 @@ class GHActions(CsmakeModuleAllPhase):
     # Composite runner                                                     #
     # ------------------------------------------------------------------ #
 
-    def _run_composite(self, action_def, action_path, inputs):
+    def _run_composite(self, action_def, action_path, inputs,
+                       step_id='', extra_env=None):
         steps = (action_def.get('runs') or {}).get('steps') or []
         step_outputs = {}
         out_f  = tempfile.mktemp(prefix='csmake_gha_out_')
@@ -207,9 +256,10 @@ class GHActions(CsmakeModuleAllPhase):
             for step in steps:
                 if not step:
                     continue
-                step_id = step.get('id') or ''
+                inner_step_id = step.get('id') or ''
                 env = self._build_gha_env(
-                    effective_inputs, action_def, out_f, env_f, path_f, action_path)
+                    effective_inputs, action_def, out_f, env_f, path_f,
+                    action_path, extra_env=extra_env)
                 for sid, outs in step_outputs.items():
                     for ok, ov in outs.items():
                         env['STEPS_%s_OUTPUTS_%s' % (sid.upper(), ok.upper())] = str(ov)
@@ -235,15 +285,16 @@ class GHActions(CsmakeModuleAllPhase):
                         self._subst(run_script, effective_inputs, step_outputs, env),
                         shell, env, action_path)
 
-                if step_id:
-                    step_outputs[step_id] = self._parse_gha_file(out_f)
+                if inner_step_id:
+                    step_outputs[inner_step_id] = self._parse_gha_file(out_f)
                     open(out_f, 'w').close()
 
             # Resolve composite action outputs: ${{ steps.*.outputs.* }} → out_f
             composite_outputs = action_def.get('outputs') or {}
             if composite_outputs:
                 tmp_env = self._build_gha_env(
-                    effective_inputs, action_def, out_f, env_f, path_f, action_path)
+                    effective_inputs, action_def, out_f, env_f, path_f,
+                    action_path, extra_env=extra_env)
                 with open(out_f, 'w') as f:
                     for out_name, out_defn in composite_outputs.items():
                         value_expr = (
@@ -253,7 +304,7 @@ class GHActions(CsmakeModuleAllPhase):
                             str(value_expr), effective_inputs, step_outputs, tmp_env)
                         f.write('%s=%s\n' % (out_name, value))
 
-            self._bridge_to_csmake(out_f, env_f, path_f)
+            self._bridge_to_csmake(out_f, env_f, path_f, step_id=step_id)
         finally:
             for f in (out_f, env_f, path_f):
                 try:
@@ -265,7 +316,8 @@ class GHActions(CsmakeModuleAllPhase):
     # Node.js runner (delegates to NodeRuntime)                           #
     # ------------------------------------------------------------------ #
 
-    def _run_node(self, action_def, action_path, inputs):
+    def _run_node(self, action_def, action_path, inputs,
+                  step_id='', extra_env=None):
         runs  = action_def.get('runs') or {}
         main  = runs.get('main')
         pre   = runs.get('pre')
@@ -278,14 +330,15 @@ class GHActions(CsmakeModuleAllPhase):
         path_f = tempfile.mktemp(prefix='csmake_gha_path_')
         try:
             env = self._build_gha_env(
-                inputs, action_def, out_f, env_f, path_f, action_path)
+                inputs, action_def, out_f, env_f, path_f, action_path,
+                extra_env=extra_env)
             runner = NodeRuntime(self.env, self.log)
             if pre:
                 runner.execute(os.path.join(action_path, pre), env, action_path)
             runner.execute(os.path.join(action_path, main), env, action_path)
             if post:
                 runner.execute(os.path.join(action_path, post), env, action_path)
-            self._bridge_to_csmake(out_f, env_f, path_f)
+            self._bridge_to_csmake(out_f, env_f, path_f, step_id=step_id)
         finally:
             for f in (out_f, env_f, path_f):
                 try:
@@ -297,7 +350,8 @@ class GHActions(CsmakeModuleAllPhase):
     # Docker runner (delegates to DockerRuntime)                          #
     # ------------------------------------------------------------------ #
 
-    def _run_docker(self, action_def, action_path, inputs):
+    def _run_docker(self, action_def, action_path, inputs,
+                    step_id='', extra_env=None):
         runs  = action_def.get('runs') or {}
         image = runs.get('image', '')
 
@@ -309,7 +363,8 @@ class GHActions(CsmakeModuleAllPhase):
         path_f = tempfile.mktemp(prefix='csmake_gha_path_')
         try:
             env = self._build_gha_env(
-                inputs, action_def, out_f, env_f, path_f, action_path)
+                inputs, action_def, out_f, env_f, path_f, action_path,
+                extra_env=extra_env)
 
             # Resolve image vs local Dockerfile
             if image.startswith('docker://'):
@@ -337,7 +392,7 @@ class GHActions(CsmakeModuleAllPhase):
                 args=action_args or None,
                 extra_volumes=['%s:/github/action_path' % action_path],
             )
-            self._bridge_to_csmake(out_f, env_f, path_f)
+            self._bridge_to_csmake(out_f, env_f, path_f, step_id=step_id)
         finally:
             for f in (out_f, env_f, path_f):
                 try:
@@ -382,9 +437,14 @@ class GHActions(CsmakeModuleAllPhase):
     # GHA environment construction                                         #
     # ------------------------------------------------------------------ #
 
-    def _build_gha_env(self, inputs, action_def, out_f, env_f, path_f, action_path):
+    def _build_gha_env(self, inputs, action_def, out_f, env_f, path_f,
+                       action_path, extra_env=None):
         """Build the subprocess environment for a GHA step."""
         env = dict(os.environ)
+        # Inject caller-supplied env vars (from --env-* options) first so
+        # GHA-protocol vars set below take precedence.
+        if extra_env:
+            env.update(extra_env)
         env['GITHUB_OUTPUT']      = out_f
         env['GITHUB_ENV']         = env_f
         env['GITHUB_PATH']        = path_f
@@ -409,13 +469,21 @@ class GHActions(CsmakeModuleAllPhase):
     # Output bridging                                                      #
     # ------------------------------------------------------------------ #
 
-    def _bridge_to_csmake(self, out_f, env_f, path_f):
+    def _bridge_to_csmake(self, out_f, env_f, path_f, step_id=''):
         """Push GITHUB_OUTPUT and GITHUB_ENV values into the csmake environment."""
-        merged = {}
-        merged.update(self._parse_gha_file(out_f))
-        merged.update(self._parse_gha_file(env_f))
+        outputs  = self._parse_gha_file(out_f)
+        env_vars = self._parse_gha_file(env_f)
+        merged   = dict(outputs)
+        merged.update(env_vars)
         if merged:
             self.env.update(merged)
+        # Store outputs under namespaced keys for ${{ steps.<id>.outputs.<name> }}
+        if step_id and outputs:
+            namespaced = {
+                '_gha_steps_%s_outputs_%s' % (step_id, k): v
+                for k, v in outputs.items()
+            }
+            self.env.update(namespaced)
 
         if os.path.exists(path_f):
             with open(path_f) as f:
@@ -470,6 +538,12 @@ class GHActions(CsmakeModuleAllPhase):
             if expr.startswith('steps.') and '.outputs.' in expr:
                 parts = expr.split('.')
                 if len(parts) >= 4:
-                    return step_outputs.get(parts[1], {}).get(parts[3], '')
+                    # composite-internal step_outputs take priority; fall
+                    # back to the workflow-level namespaced csmake env key
+                    local = step_outputs.get(parts[1], {}).get(parts[3], '')
+                    if local:
+                        return local
+                    csmake_key = '_gha_steps_%s_outputs_%s' % (parts[1], parts[3])
+                    return str(self.env.env.get(csmake_key, ''))
             return m.group(0)
         return _EXPR_RE.sub(_replace, text)

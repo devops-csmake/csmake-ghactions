@@ -33,16 +33,13 @@ jobs:
         run: |
           echo "result=greet-job-done" >> "$GITHUB_OUTPUT"
 
-    outputs:
-      result: ${{ steps.write-job-output.outputs.result }}
-
   downstream:
     needs: greet
     steps:
-      - name: Use upstream job output
+      - name: Use upstream step output (cross-job via csmake env)
         shell: bash
         run: |
-          echo "Upstream result: ${{ needs.greet.outputs.result }}"
+          echo "write-job-output result: ${{ steps.write-job-output.outputs.result }}"
 
       - name: Conditional step (should run)
         if: true
