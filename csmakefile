@@ -1,0 +1,27 @@
+[~~phases~~]
+build=Build and package csmake-ghactions
+test=Run unit and integration tests
+clean=Clean build artifacts
+
+# -----------------------------------------------------------------------
+# Integration test: composite action with default input
+# -----------------------------------------------------------------------
+[GHActions@hello-default]
+--action=./test-actions/hello-composite
+
+# -----------------------------------------------------------------------
+# Integration test: composite action with explicit input
+# -----------------------------------------------------------------------
+[GHActions@hello-named]
+--action=./test-actions/hello-composite
+who-to-greet=csmake
+
+# -----------------------------------------------------------------------
+# Test phases
+# -----------------------------------------------------------------------
+[command@test-ghactions]
+0000=hello-default
+0010=hello-named
+
+[~~test~~]
+00=test-ghactions

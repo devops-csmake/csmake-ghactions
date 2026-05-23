@@ -1,0 +1,20 @@
+[~~phases~~]
+test=Test GHActionsWorkflow with a local hello workflow
+
+# Run the full workflow YAML through GHActionsWorkflow.
+# Exercises: uses: steps, run: steps, env layering, step outputs,
+# job outputs via needs:, and if: conditions.
+
+[GHActionsWorkflow@hello-workflow]
+--workflow=test-workflows/hello-workflow.yml
+
+[GHActionsWorkflow@hello-workflow-greet-only]
+--workflow=test-workflows/hello-workflow.yml
+--job=greet
+
+[command@test-workflow]
+0000=hello-workflow
+0010=hello-workflow-greet-only
+
+[~~test~~]
+00=test-workflow

@@ -1,0 +1,20 @@
+[~~phases~~]
+test=Test GHActions with actions/hello-world-docker-action
+
+# Run the official GitHub hello-world Docker action.
+# Builds the action's Dockerfile locally, then runs the container.
+# Inputs: who-to-greet
+
+[GHActions@hello-docker-default]
+--action=actions/hello-world-docker-action@v2
+
+[GHActions@hello-docker-named]
+--action=actions/hello-world-docker-action@v2
+who-to-greet=csmake
+
+[command@test-docker-action]
+0000=hello-docker-default
+0010=hello-docker-named
+
+[~~test~~]
+00=test-docker-action

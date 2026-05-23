@@ -1,0 +1,61 @@
+name: Hello Workflow
+
+env:
+  WORKFLOW_VAR: from-workflow
+
+jobs:
+  greet:
+    env:
+      JOB_VAR: from-job
+    steps:
+      - id: say-hello
+        name: Run composite hello action (default input)
+        uses: ./test-actions/hello-composite
+
+      - id: say-hello-named
+        name: Run composite hello action (named input)
+        uses: ./test-actions/hello-composite
+        with:
+          who-to-greet: workflow-user
+
+      - id: show-outputs
+        name: Show captured step outputs
+        shell: bash
+        run: |
+          echo "Default greeting: ${{ steps.say-hello.outputs.greeting }}"
+          echo "Named greeting:   ${{ steps.say-hello-named.outputs.greeting }}"
+          echo "WORKFLOW_VAR:     ${{ env.WORKFLOW_VAR }}"
+          echo "JOB_VAR:          ${{ env.JOB_VAR }}"
+
+      - id: write-job-output
+        name: Write a value for downstream job
+        shell: bash
+        run: |
+          echo "result=greet-job-done" >> "$GITHUB_OUTPUT"
+
+    outputs:
+      result: ${{ steps.write-job-output.outputs.result }}
+
+  downstream:
+    needs: greet
+    steps:
+      - name: Use upstream job output
+        shell: bash
+        run: |
+          echo "Upstream result: ${{ needs.greet.outputs.result }}"
+
+      - name: Conditional step (should run)
+        if: true
+        shell: bash
+        run: echo "Condition was true"
+
+      - name: Conditional step (should skip)
+        if: false
+        shell: bash
+        run: echo "This should NOT print"
+
+      - name: Step with step-level env
+        env:
+          STEP_GREETING: Hello from step env
+        shell: bash
+        run: echo "$STEP_GREETING"

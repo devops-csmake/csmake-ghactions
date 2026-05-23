@@ -1,0 +1,21 @@
+name: Hello Composite
+description: Minimal composite action used to test GHActions locally
+inputs:
+  who-to-greet:
+    description: Who to greet
+    required: false
+    default: World
+outputs:
+  greeting:
+    description: The greeting that was produced
+    value: ${{ steps.greet.outputs.greeting }}
+runs:
+  using: composite
+  steps:
+    - id: greet
+      shell: bash
+      run: |
+        msg="Hello, ${{ inputs.who-to-greet }}!"
+        echo "greeting=$msg" >> "$GITHUB_OUTPUT"
+        echo "GREETED_BY=csmake-ghactions" >> "$GITHUB_ENV"
+        echo "$msg"

@@ -1,0 +1,20 @@
+[~~phases~~]
+test=Test GHActions with actions/hello-world-javascript-action
+
+# Run the official GitHub hello-world JavaScript action.
+# Inputs: who-to-greet
+# Outputs: time  (written to GITHUB_OUTPUT, bridged into csmake env)
+
+[GHActions@hello-js-default]
+--action=actions/hello-world-javascript-action@v1.1
+
+[GHActions@hello-js-named]
+--action=actions/hello-world-javascript-action@v1.1
+who-to-greet=csmake
+
+[command@test-js-action]
+0000=hello-js-default
+0010=hello-js-named
+
+[~~test~~]
+00=test-js-action
