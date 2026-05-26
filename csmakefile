@@ -138,6 +138,15 @@ package-version=1.0
 maps=ghactions-installs
 result=%(RESULTS)s/zipfile
 
+[CsmakeModulePackager@csm-ghactions]
+result=%(RESULTS)s/csm
+include=
+    CsmakeModules/*.py,
+    GHActionsLibrary/*.py
+dependencies=
+    csmake-node-runtime>=1.0.0,
+    csmake-docker-runtime>=1.0.0
+
 # -----------------------------------------------------------------------
 # Integration tests
 # -----------------------------------------------------------------------
@@ -161,7 +170,7 @@ description=Run integration tests against local composite actions
 # -----------------------------------------------------------------------
 [command@default]
 description=Create and package a csmake-ghactions release
-00=csmake-ghactions, wheel-ghactions & zip-ghactions
+00=csmake-ghactions, wheel-ghactions & zip-ghactions & csm-ghactions
 
 [command@wheel-only]
 description=Create a wheel package only
