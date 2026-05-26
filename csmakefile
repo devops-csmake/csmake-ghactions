@@ -1,27 +1,180 @@
+# <copyright>
+# (c) Copyright 2025 Autumn Patterson
+#
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+# Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# </copyright>
+#====================================================================
+#   csmake-ghactions  csmakefile
+#====================================================================
+
 [~~phases~~]
-build=Build and package csmake-ghactions
+clean=Remove all csmake generated files
+package=Create the csmake-ghactions package
 test=Run unit and integration tests
-clean=Clean build artifacts
+**sequences=
+   clean -> package: build the csmake-ghactions install package
+**default=clean -> package
 
 # -----------------------------------------------------------------------
-# Integration test: composite action with default input
+# Package metadata
+# -----------------------------------------------------------------------
+[metadata@csmake-ghactions]
+name=csmake-ghactions
+version=1.0.0
+description=GitHub Actions workflow and action execution for csmake
+about=Provides csmake modules and an extension for running GitHub Actions
+ locally as part of a csmake build.
+ .
+ Modules:
+   GHActions      - execute any GitHub Action (composite, node, or docker)
+   GHActionsShell - execute a GHA 'run:' step with full GHA protocol
+ .
+ Extension:
+   Extension__GHActions - registers --gha-workflow so csmake can execute
+                          a GitHub Actions workflow YAML directly in place
+                          of a csmakefile.
+ .
+ Library:
+   GHActionsLibrary - YAML workflow parser (GHActionsFileReader)
+ .
+ Requires csmake-node-runtime and csmake-docker-runtime on PYTHONPATH
+ for Node.js and Docker action execution respectively.
+packager=Autumn Patterson <autumn@devops-csmake.com>
+manufacturer=devops-csmake
+depends=python3, csmake, csmake-node-runtime, csmake-docker-runtime, python3-yaml
+keywords=make build development github actions ci workflow
+url=https://github.com/devops-csmake/csmake-ghactions
+copyrights=ghactions-copyright
+classifiers=
+    Development Status :: 4 - Beta
+    Intended Audience :: Developers
+    Topic :: Software Development :: Build Tools
+    Programming Language :: Python :: 3
+    License :: OSI Approved :: GNU General Public License v3 (GPLv3)
+**files=
+    <CsmakeModules (python:csmake-modules)> CsmakeModules/*.py,
+    <GHActionsLibrary (python:library)> GHActionsLibrary/*.py
+
+# -----------------------------------------------------------------------
+# Copyright
+# -----------------------------------------------------------------------
+[copyright@ghactions-copyright]
+disclaimer=
+ This program is free software: you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the
+ Free Software Foundation, either version 3 of the License, or (at your
+ option) any later version.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+ Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>.
+license=GPLv3
+holder=Autumn Patterson
+years=2025
+
+# -----------------------------------------------------------------------
+# Install map
+# -----------------------------------------------------------------------
+[installmap@ghactions-installs]
+path_root=INSTALL_ROOT
+path_python-lib=PYTHON
+owner_root=root
+group_root=root
+
+map_CsmakeModules=
+   map: <CsmakeModules> -(1-1)-> {PYTHON}/CsmakeGHActions/CsmakeModules/[~~file~~]
+   copyright: ghactions-copyright
+   owner:{root}
+   group:{root}
+   permissions:644
+
+map_GHActionsLibrary=
+   map: <GHActionsLibrary> -(1-1)-> {PYTHON}/GHActionsLibrary/[~~file~~]
+   copyright: ghactions-copyright
+   owner:{root}
+   group:{root}
+   permissions:644
+
+# -----------------------------------------------------------------------
+# Versioning
+# -----------------------------------------------------------------------
+[versioning@snapshot-version]
+designation=snapshot
+format={datetime}.{gitSHA}
+shell_datetime=date --utc +%%Y%%m%%d%%H%%M%%S
+shell_gitSHA=git rev-parse HEAD
+
+[versioning@rc-version]
+designation=rc
+format=rc{rc}
+value_rc=1
+
+# -----------------------------------------------------------------------
+# Package targets
+# -----------------------------------------------------------------------
+[WheelPackage@wheel-ghactions]
+package-version=1.0
+top-level=CsmakeGHActions
+maps=ghactions-installs
+result=%(RESULTS)s/wheelfile
+
+[ZipPackager@zip-ghactions]
+package-version=1.0
+maps=ghactions-installs
+result=%(RESULTS)s/zipfile
+
+# -----------------------------------------------------------------------
+# Integration tests
 # -----------------------------------------------------------------------
 [GHActions@hello-default]
 --action=./test-actions/hello-composite
 
-# -----------------------------------------------------------------------
-# Integration test: composite action with explicit input
-# -----------------------------------------------------------------------
 [GHActions@hello-named]
 --action=./test-actions/hello-composite
 who-to-greet=csmake
 
-# -----------------------------------------------------------------------
-# Test phases
-# -----------------------------------------------------------------------
 [command@test-ghactions]
+description=Run integration tests against local composite actions
 0000=hello-default
 0010=hello-named
 
 [~~test~~]
 00=test-ghactions
+
+# -----------------------------------------------------------------------
+# Build commands
+# -----------------------------------------------------------------------
+[command@default]
+description=Create and package a csmake-ghactions release
+00=csmake-ghactions, wheel-ghactions & zip-ghactions
+
+[command@wheel-only]
+description=Create a wheel package only
+00=csmake-ghactions, wheel-ghactions
+
+[command@zip-only]
+description=Create a zip package only
+00=csmake-ghactions, zip-ghactions
+
+[command@snapshot]
+description=Build a snapshot package
+00=csmake-ghactions, snapshot-version, default
+
+[command@rc]
+description=Build a release candidate package
+00=csmake-ghactions, rc-version, default

@@ -32,8 +32,8 @@ except ImportError:
     _HAS_YAML = False
 
 from CsmakeCore.CsmakeModuleAllPhase import CsmakeModuleAllPhase
-from CsmakeModules.NodeRuntime import NodeRuntime
-from CsmakeModules.DockerRuntime import DockerRuntime
+from NodeRuntimeLibrary.NodeRuntime import NodeRuntime
+from DockerRuntimeLibrary.DockerRuntime import DockerRuntime
 
 _ACTIONS_CACHE = os.path.expanduser('~/.csmake/ghactions')
 _EXPR_RE = re.compile(r'\$\{\{\s*(.*?)\s*\}\}')
@@ -332,7 +332,7 @@ class GHActions(CsmakeModuleAllPhase):
             env = self._build_gha_env(
                 inputs, action_def, out_f, env_f, path_f, action_path,
                 extra_env=extra_env)
-            runner = NodeRuntime(self.env, self.log)
+            runner = NodeRuntime()
             if pre:
                 runner.execute(os.path.join(action_path, pre), env, action_path)
             runner.execute(os.path.join(action_path, main), env, action_path)
@@ -382,7 +382,7 @@ class GHActions(CsmakeModuleAllPhase):
                 for a in (runs.get('args') or [])
             ]
 
-            runner = DockerRuntime(self.env, self.log)
+            runner = DockerRuntime()
             runner.execute(
                 image=actual_image,
                 env=env,
