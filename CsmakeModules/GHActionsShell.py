@@ -19,12 +19,20 @@ import re
 import subprocess
 import tempfile
 
-from CsmakeCore.CsmakeModuleAllPhase import CsmakeModuleAllPhase
+from CsmakeModules.Shell import Shell
 
 _EXPR_RE = re.compile(r'\$\{\{\s*(.*?)\s*\}\}')
 
+_SHELL_EXEC = {
+    'bash':    '/bin/bash',
+    'sh':      '/bin/sh',
+    'pwsh':    'pwsh',
+    'python':  'python',
+    'python3': 'python3',
+}
 
-class GHActionsShell(CsmakeModuleAllPhase):
+
+class GHActionsShell(Shell):
     """Purpose: Execute a GitHub Actions 'run:' step locally
        Type: Module   Library: csmake-ghactions
        Phases: *any*
@@ -41,60 +49,129 @@ class GHActionsShell(CsmakeModuleAllPhase):
            --env-<KEY> - inject KEY=VALUE into the script's environment;
                          generated automatically when running from a workflow
                          YAML (workflow + job + step env are merged)
+           env         - (OPTIONAL) Reference to ShellEnv section(s), same as
+                         Shell module
        Notes:
            GITHUB_OUTPUT, GITHUB_ENV, and GITHUB_PATH are wired up
            automatically.  Values written to GITHUB_OUTPUT are stored in the
            csmake environment both flat (key) and namespaced
            (_gha_steps_<step_id>_outputs_<key>) so that subsequent steps can
            reference them via ${{ steps.<step-id>.outputs.<key> }}.
+           bash and sh run with -eo pipefail for GHA compatibility.
     """
 
     REQUIRED_OPTIONS = ['--script']
+
+    # ------------------------------------------------------------------ #
+    # Shell overrides                                                      #
+    # ------------------------------------------------------------------ #
+
+    def _getCommand(self, options, phase):
+        if '--script' not in options:
+            self.log.debug("Command for phase '%s' not defined" % phase)
+            return (None, None)
+        self.log.info("Executing GHA run: step in phase '%s'" % phase)
+        return ('command', options['--script'])
+
+    def _getExecer(self, options):
+        shell = options.get('--shell', 'bash')
+        return _SHELL_EXEC.get(shell, shell)
+
+    def _getStartingEnvironment(self, options):
+        env = dict(os.environ)
+        env.setdefault('GITHUB_WORKSPACE', os.getcwd())
+        for k, v in options.items():
+            if k.startswith('--env-'):
+                env[k[6:]] = v
+        return env
+
+    def _executeShell(self, command, env, execer='/bin/bash', cwd=None):
+        """Run script via temp file with -eo pipefail for bash/sh."""
+        shell_name = os.path.basename(execer or 'bash')
+        if cwd is None:
+            cwd = env.get('GITHUB_WORKSPACE') or os.getcwd()
+
+        if shell_name in ('bash', 'sh'):
+            preamble = ([execer, '--noprofile', '--norc', '-eo', 'pipefail']
+                        if shell_name == 'bash' else [execer, '-e'])
+            fd, tmp = tempfile.mkstemp(suffix='.sh')
+            try:
+                os.write(fd, command.encode('utf-8'))
+                os.close(fd)
+                os.chmod(tmp, 0o700)
+                return subprocess.call(
+                    preamble + [tmp],
+                    env=env,
+                    cwd=cwd,
+                    stdout=self.log.out(),
+                    stderr=self.log.err())
+            finally:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+        else:
+            return subprocess.call(
+                [execer, command],
+                env=env,
+                cwd=cwd,
+                stdout=self.log.out(),
+                stderr=self.log.err())
+
+    # ------------------------------------------------------------------ #
+    # default — GHA protocol around Shell execution                        #
+    # ------------------------------------------------------------------ #
 
     def default(self, options):
         step_id = options.get('--step-id', '')
         name    = options.get('--name', step_id or 'run step')
 
+        env = self._getStartingEnvironment(options).copy()
+
         if_cond = options.get('--if')
-        if if_cond is not None:
-            env = self._build_env(options)
-            if not self._eval_if(if_cond, env):
-                self.log.chat("  Skipping step (condition false): " + name)
-                self.log.passed()
-                return True
+        if if_cond is not None and not self._eval_if(if_cond, env):
+            self.log.chat("  Skipping step (condition false): " + name)
+            self.log.passed()
+            return True
 
-        script = options['--script']
-        shell  = options.get('--shell', 'bash')
-        workdir = options.get('--working-directory')
+        (_, script) = self._getCommand(options, self.engine.getPhase())
+        if script is None:
+            self._dontValidateFiles()
+            self.log.skipped()
+            return None
 
-        env = self._build_env(options)
         script = self._subst(script, env)
 
+        workdir = options.get('--working-directory')
         if workdir:
             workdir = self._subst(workdir, env)
             workdir = os.path.normpath(os.path.join(os.getcwd(), workdir))
-        else:
-            workdir = os.getcwd()
+            env['GITHUB_WORKSPACE'] = workdir
 
         out_f  = tempfile.mktemp(prefix='csmake_ghas_out_')
         env_f  = tempfile.mktemp(prefix='csmake_ghas_env_')
         path_f = tempfile.mktemp(prefix='csmake_ghas_path_')
 
-        env['GITHUB_OUTPUT']    = out_f
-        env['GITHUB_ENV']       = env_f
-        env['GITHUB_PATH']      = path_f
-        env['GITHUB_WORKSPACE'] = workdir
+        env['GITHUB_OUTPUT'] = out_f
+        env['GITHUB_ENV']    = env_f
+        env['GITHUB_PATH']   = path_f
+
+        # Apply ShellEnv refs and mapping vars from Shell
+        env = self._getEnvironment(options, env)
+
+        execer = self._getExecer(options)
+        cwd    = env.get('GITHUB_WORKSPACE') or os.getcwd()
 
         try:
-            self._exec_shell(script, shell, env, workdir)
+            rc = self._executeShell(script, env, execer, cwd=cwd)
 
             outputs = self._parse_gha_file(out_f)
             if outputs:
                 self.env.update(outputs)
                 if step_id:
                     for k, v in outputs.items():
-                        key = '_gha_steps_%s_outputs_%s' % (step_id, k)
-                        self.env.update({key: v})
+                        self.env.update(
+                            {'_gha_steps_%s_outputs_%s' % (step_id, k): v})
 
             env_vars = self._parse_gha_file(env_f)
             if env_vars:
@@ -108,8 +185,12 @@ class GHActionsShell(CsmakeModuleAllPhase):
                             os.environ['PATH'] = (
                                 line + os.pathsep + os.environ.get('PATH', ''))
 
-            self.log.passed()
-            return True
+            if rc == 0:
+                self.log.passed()
+                return True
+            else:
+                self.log.failed()
+                return None
         except Exception as e:
             self.log.error("GHActionsShell failed: " + str(e))
             self.log.failed()
@@ -120,18 +201,6 @@ class GHActionsShell(CsmakeModuleAllPhase):
                     os.unlink(f)
                 except OSError:
                     pass
-
-    # ------------------------------------------------------------------ #
-    # Environment construction                                             #
-    # ------------------------------------------------------------------ #
-
-    def _build_env(self, options):
-        env = dict(os.environ)
-        env.setdefault('GITHUB_WORKSPACE', os.getcwd())
-        for k, v in options.items():
-            if k.startswith('--env-'):
-                env[k[6:]] = v  # strip '--env-' prefix
-        return env
 
     # ------------------------------------------------------------------ #
     # ${{ }} expression substitution                                       #
@@ -179,38 +248,6 @@ class GHActionsShell(CsmakeModuleAllPhase):
             return False
         result = self._subst(str(condition).strip(), env)
         return result.lower().strip() not in ('false', '0', '', 'null', 'none')
-
-    # ------------------------------------------------------------------ #
-    # Shell execution                                                      #
-    # ------------------------------------------------------------------ #
-
-    _SHELL_PREAMBLE = {
-        'bash':    ['bash', '--noprofile', '--norc', '-eo', 'pipefail'],
-        'sh':      ['sh', '-e'],
-        'pwsh':    ['pwsh', '-NonInteractive', '-Command'],
-        'python':  ['python'],
-        'python3': ['python3'],
-    }
-
-    def _exec_shell(self, script, shell, env, cwd):
-        preamble = self._SHELL_PREAMBLE.get(
-            shell, ['bash', '--noprofile', '--norc', '-eo', 'pipefail'])
-        if shell in ('bash', 'sh'):
-            fd, tmp = tempfile.mkstemp(suffix='.sh')
-            try:
-                os.write(fd, script.encode('utf-8'))
-                os.close(fd)
-                os.chmod(tmp, 0o700)
-                rc = subprocess.call(preamble + [tmp], env=env, cwd=cwd)
-            finally:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
-        else:
-            rc = subprocess.call(preamble + [script], env=env, cwd=cwd)
-        if rc != 0:
-            raise RuntimeError("Shell step exited with code %d" % rc)
 
     # ------------------------------------------------------------------ #
     # GITHUB_OUTPUT / GITHUB_ENV file parser                              #
